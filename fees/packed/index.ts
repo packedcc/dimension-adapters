@@ -117,13 +117,11 @@ const chainConfig: Record<string, ChainConfig> = {
     packFactories: [],
     curveTrades: true,
     taxInPoolFee: false,
-    // Packed buys back $PACKD and burns it. Every buy so far is a swap of ETH for $PACKD in the
-    // ETH/$PACKD pool, made by one of two wallets: the fee wallet itself (first one: tx
-    // 0xf06b6c6c8a5935a87f610dc805ee33a32c6ed50fff0e7f564b491f96ed090b95), out of Packed's revenue,
-    // and the team wallet that launched $PACKD, which hands every $PACKD it buys to the fee wallet
-    // for the burn and has never sold. The team wallet pays out of the creator fee and creator tax
-    // $PACKD earns as a coin launched on Pons: Pons' fees, not Packed's, so not in Revenue here.
-    // Its launch allocation went straight into a 12-month lock and is not a buy, so it is not counted.
+    // Packed buys back $PACKD and burns it. Only the fee wallet's buys are counted: each is a swap of
+    // ETH for $PACKD in the ETH/$PACKD pool, paid out of Packed's revenue (first one: tx
+    // 0xf06b6c6c8a5935a87f610dc805ee33a32c6ed50fff0e7f564b491f96ed090b95), so HoldersRevenue stays a
+    // subset of Fees. Buys paid out of $PACKD's creator income on Pons are Pons' fees, not Packed's,
+    // and are left out.
     // The burns are plain transfers from the fee wallet to 0x...dEaD
     // (tx 0x382b9c93b0a5513ec0ab7dd29a654fcf60d0ae19cba50a4faea371a67bb1911d).
     buyback: {
@@ -132,7 +130,6 @@ const chainConfig: Record<string, ChainConfig> = {
       feeWallet: "0x71bb2cc5be1599aacd36080321f1b781a46fd1d9",
       wallets: [
         "0x71bb2cc5be1599aacd36080321f1b781a46fd1d9", // fee wallet: protocolFeeRecipient() of every factory above
-        "0x88888ac5967484dd6e03d0b89e9a8abac6a88888", // team wallet, creator of $PACKD
       ],
       poolManager: "0x8366a39cc670b4001a1121b8f6a443a643e40951", // Uniswap v4 PoolManager on Robinhood Chain
       poolId: "0xf40adb78665275f2cdd62e06fc29d0a892c359790017612d198086ac6cd392ef", // ETH/$PACKD, from the Swap logs of the buys
@@ -214,8 +211,7 @@ function balances(options: FetchOptions) {
     revenueBuybacks,
     // The fee wallet's buybacks are paid out of Packed's own share, so they move from protocol
     // revenue to holders revenue; on a buyback day protocol revenue can go negative (fees/AGENTS.md,
-    // accrual basis). The team wallet's are paid out of $PACKD's creator income on Pons, which is
-    // not in Revenue here, so they are holders revenue without being taken out of protocol revenue.
+    // accrual basis).
     result: () => {
       const dailyProtocolRevenue = dailyRevenue.clone();
       dailyProtocolRevenue.subtract(revenueBuybacks);
@@ -297,11 +293,11 @@ async function addPackBids(options: FetchOptions, packFactories: string[], b: Re
  *
  * Counted at the buy rather than at the burn: the burn is a transfer of coins already counted, and
  * $PACKD has no price to value it by. A transfer into a wallet without a swap in this pool in the
- * same transaction (for example the team wallet handing its buys to the fee wallet) is not a buy,
+ * same transaction (for example another wallet handing $PACKD to the fee wallet) is not a buy,
  * and is left out, so nothing is counted twice.
  *
  * The fee wallet's buys overlap Revenue rather than adding to it: the ETH spent is Packed's
- * income. The team wallet's are paid out of $PACKD's own creator income on Pons, outside Revenue.
+ * income.
  */
 async function addBuybacks(options: FetchOptions, buyback: NonNullable<ChainConfig["buyback"]>, b: ReturnType<typeof balances>) {
   const received = (await Promise.all(buyback.wallets.map((wallet) => options.getLogs({
@@ -313,7 +309,7 @@ async function addBuybacks(options: FetchOptions, buyback: NonNullable<ChainConf
   if (!received.length) return;
   // Each $PACKD receipt, by transaction. Every receipt is paired with one swap, so another swap in
   // the same transaction is never counted. The pool's hook keeps a cut of the $PACKD a swap pays out
-  // (4% on the first team-wallet buy, tx 0xc4f698beb195...), so a receipt is at most the swap's
+  // (4% on a buy, tx 0xc4f698beb195...), so a receipt is at most the swap's
   // amount1 rather than equal to it.
   const receipts = new Map<string, bigint[]>();
   for (const l of received) {
@@ -435,7 +431,7 @@ const methodology = {
   Revenue: "Packed's share: the launch fee in full, 25% of the 1% curve fee, 25% of the 1% pool fee, and half of every seat bid.",
   ProtocolRevenue: "Revenue minus the ETH the fee wallet spends buying back $PACKD, which is moved to HoldersRevenue. Negative on days when a buyback spends more than that day's revenue.",
   SupplySideRevenue: "The creator's 75% of the 1% curve and pool fees, the whole creator tax and anti-snipe charges, and the launcher's half of seat bids. For a reward coin the creator's share goes to the coin's holders instead.",
-  HoldersRevenue: "ETH Packed spends buying back $PACKD, its own token, on the open market on Robinhood Chain; the coins bought are burned. The fee wallet pays out of Packed's revenue above, and that part is moved out of ProtocolRevenue. The team wallet pays out of the creator fee and creator tax $PACKD earns as a coin launched on Pons, which are Pons' fees and not in Revenue here, so HoldersRevenue can be larger than Revenue.",
+  HoldersRevenue: "ETH Packed spends buying back $PACKD, its own token, on the open market on Robinhood Chain; the coins bought are burned. Only the fee wallet's buys are counted: they are paid out of Packed's revenue above and moved out of ProtocolRevenue.",
 };
 
 const breakdownMethodology = {
@@ -468,7 +464,7 @@ const breakdownMethodology = {
     [PACK_BIDS_TO_LAUNCHERS]: "The launcher's half of every seat bid.",
   },
   HoldersRevenue: {
-    [METRIC.TOKEN_BUY_BACK]: "ETH spent by the fee wallet (out of Packed's revenue) and the team wallet (out of $PACKD's creator income on Pons) swapping for $PACKD in the ETH/$PACKD Uniswap v4 pool, on the day of each buy. The coins bought are burned.",
+    [METRIC.TOKEN_BUY_BACK]: "ETH spent by the fee wallet, out of Packed's revenue, swapping for $PACKD in the ETH/$PACKD Uniswap v4 pool, on the day of each buy. The coins bought are burned.",
   },
 };
 
